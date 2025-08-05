@@ -1,102 +1,121 @@
 // API functions for Ledo Sports Academy
 
 // Base API URL
-const API_URL = '/api';
+const API_URL = '';
 
-// Generic fetch function with error handling
-async function fetchAPI(endpoint, method = 'GET', data = null) {
-  try {
-    const options = {
-      method,
-      headers: {
-        'Content-Type': 'application/json'
+// Generic fetch function with error handling and retry logic
+async function fetchAPI(endpoint, method = 'GET', data = null, retries = 3) {
+  let lastError;
+  
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const options = {
+        method,
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        // Add cache control to prevent caching issues
+        cache: 'no-cache',
+        // Add timeout to prevent hanging requests
+        signal: AbortSignal.timeout(30000) // 30 second timeout
+      };
+
+      if (data && (method === 'POST' || method === 'PUT')) {
+        options.body = JSON.stringify(data);
       }
-    };
 
-    if (data && (method === 'POST' || method === 'PUT')) {
-      options.body = JSON.stringify(data);
+      const response = await fetch(`${API_URL}${endpoint}`, options);
+      
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      lastError = error;
+      console.error(`API Request Failed (attempt ${attempt + 1}/${retries}):`, error);
+      
+      // Only show message on final attempt to avoid spamming the user
+      if (attempt === retries - 1) {
+        showMessage(`API Request Failed: ${error.message}. Check your network connection.`, 'error');
+      } else {
+        console.log(`Retrying in ${Math.pow(2, attempt)} seconds...`);
+        // Wait before retrying with exponential backoff
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+      }
     }
-
-    const response = await fetch(`${API_URL}${endpoint}`, options);
-    
-    if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
-    }
-    
-    return await response.json();
-  } catch (error) {
-    console.error('API Request Failed:', error);
-    showMessage(`API Request Failed: ${error.message}`, 'error');
-    throw error;
   }
+  
+  // If we've exhausted all retries, throw the last error
+  throw lastError;
 }
 
 // Hero Slides API
 const heroSlidesAPI = {
-  getAll: async () => await fetchAPI('/hero-slides'),
-  create: async (data) => await fetchAPI('/hero-slides', 'POST', data),
-  update: async (data) => await fetchAPI('/hero-slides', 'POST', data),
-  delete: async (id) => await fetchAPI(`/hero-slides/${id}`, 'DELETE')
+  getAll: async () => await fetchAPI('/api/hero-slides'),
+  create: async (data) => await fetchAPI('/api/hero-slides', 'POST', data),
+  update: async (data) => await fetchAPI('/api/hero-slides', 'POST', data),
+  delete: async (id) => await fetchAPI(`/api/hero-slides/${id}`, 'DELETE')
 };
 
 // Activities API
 const activitiesAPI = {
-  getAll: async () => await fetchAPI('/activities'),
-  create: async (data) => await fetchAPI('/activities', 'POST', data),
-  update: async (data) => await fetchAPI('/activities', 'POST', data),
-  delete: async (id) => await fetchAPI(`/activities/${id}`, 'DELETE')
+  getAll: async () => await fetchAPI('/api/activities'),
+  create: async (data) => await fetchAPI('/api/activities', 'POST', data),
+  update: async (data) => await fetchAPI('/api/activities', 'POST', data),
+  delete: async (id) => await fetchAPI(`/api/activities/${id}`, 'DELETE')
 };
 
 // Members API
 const membersAPI = {
-  getAll: async () => await fetchAPI('/members'),
-  create: async (data) => await fetchAPI('/members', 'POST', data),
-  update: async (data) => await fetchAPI('/members', 'POST', data),
-  delete: async (id) => await fetchAPI(`/members/${id}`, 'DELETE')
+  getAll: async () => await fetchAPI('/api/members'),
+  create: async (data) => await fetchAPI('/api/members', 'POST', data),
+  update: async (data) => await fetchAPI('/api/members', 'POST', data),
+  delete: async (id) => await fetchAPI(`/api/members/${id}`, 'DELETE')
 };
 
 // Donations API
 const donationsAPI = {
-  getAll: async () => await fetchAPI('/donations'),
-  create: async (data) => await fetchAPI('/donations', 'POST', data),
-  update: async (data) => await fetchAPI('/donations', 'POST', data),
-  delete: async (id) => await fetchAPI(`/donations/${id}`, 'DELETE')
+  getAll: async () => await fetchAPI('/api/donations'),
+  create: async (data) => await fetchAPI('/api/donations', 'POST', data),
+  update: async (data) => await fetchAPI('/api/donations', 'POST', data),
+  delete: async (id) => await fetchAPI(`/api/donations/${id}`, 'DELETE')
 };
 
 // Expenses API
 const expensesAPI = {
-  getAll: async () => await fetchAPI('/expenses'),
-  create: async (data) => await fetchAPI('/expenses', 'POST', data),
-  update: async (data) => await fetchAPI('/expenses', 'POST', data),
-  delete: async (id) => await fetchAPI(`/expenses/${id}`, 'DELETE')
+  getAll: async () => await fetchAPI('/api/expenses'),
+  create: async (data) => await fetchAPI('/api/expenses', 'POST', data),
+  update: async (data) => await fetchAPI('/api/expenses', 'POST', data),
+  delete: async (id) => await fetchAPI(`/api/expenses/${id}`, 'DELETE')
 };
 
 // Experiences API
 const experiencesAPI = {
-  getAll: async () => await fetchAPI('/experiences'),
-  create: async (data) => await fetchAPI('/experiences', 'POST', data),
-  update: async (data) => await fetchAPI('/experiences', 'POST', data),
-  delete: async (id) => await fetchAPI(`/experiences/${id}`, 'DELETE')
+  getAll: async () => await fetchAPI('/api/experiences'),
+  create: async (data) => await fetchAPI('/api/experiences', 'POST', data),
+  update: async (data) => await fetchAPI('/api/experiences', 'POST', data),
+  delete: async (id) => await fetchAPI(`/api/experiences/${id}`, 'DELETE')
 };
 
 // Weekly Fees API
 const weeklyFeesAPI = {
-  getAll: async () => await fetchAPI('/weekly-fees'),
-  getMemberFees: async (memberId) => await fetchAPI(`/weekly-fees/${memberId}`),
-  addPayment: async (memberId, data) => await fetchAPI(`/weekly-fees/${memberId}`, 'POST', data),
-  updatePayment: async (memberId, paymentId, data) => await fetchAPI(`/weekly-fees/${memberId}/${paymentId}`, 'PUT', data),
-  deletePayment: async (memberId, paymentId) => await fetchAPI(`/weekly-fees/${memberId}/${paymentId}`, 'DELETE')
+  getAll: async () => await fetchAPI('/api/weekly-fees'),
+  getMemberFees: async (memberId) => await fetchAPI(`/api/weekly-fees/${memberId}`),
+  addPayment: async (memberId, data) => await fetchAPI(`/api/weekly-fees/${memberId}`, 'POST', data),
+  updatePayment: async (memberId, paymentId, data) => await fetchAPI(`/api/weekly-fees/${memberId}/${paymentId}`, 'PUT', data),
+  deletePayment: async (memberId, paymentId) => await fetchAPI(`/api/weekly-fees/${memberId}/${paymentId}`, 'DELETE')
 };
 
 // Gallery API
 const galleryAPI = {
-  getAll: async () => await fetchAPI('/gallery'),
-  getTop5: async () => await fetchAPI('/gallery/top5'),
-  create: async (data) => await fetchAPI('/gallery', 'POST', data),
-  update: async (data) => await fetchAPI('/gallery', 'POST', data),
-  toggleTop5: async (id) => await fetchAPI(`/gallery/toggle-top5/${id}`, 'PUT'),
-  updateOrder: async (items) => await fetchAPI('/gallery/update-order', 'PUT', { items }),
-  delete: async (id) => await fetchAPI(`/gallery/${id}`, 'DELETE')
+  getAll: async () => await fetchAPI('/api/gallery'),
+  getTop5: async () => await fetchAPI('/api/gallery/top5'),
+  create: async (data) => await fetchAPI('/api/gallery', 'POST', data),
+  update: async (data) => await fetchAPI('/api/gallery', 'POST', data),
+  toggleTop5: async (id) => await fetchAPI(`/api/gallery/toggle-top5/${id}`, 'PUT'),
+  updateOrder: async (items) => await fetchAPI('/api/gallery/update-order', 'PUT', { items }),
+  delete: async (id) => await fetchAPI(`/api/gallery/${id}`, 'DELETE')
 };
 
 // Load all data from API
@@ -170,7 +189,28 @@ async function loadAllData() {
     
     // Initialize sync system with server status
     if (typeof syncData === 'function') {
-      syncData(serverAvailable);
+      // Perform initial sync to ensure all data is properly synchronized
+      setTimeout(() => {
+        syncData().then(syncSuccess => {
+          if (syncSuccess) {
+            console.log('Initial data synchronization successful');
+            
+            // Start periodic sync if available
+            if (typeof startPeriodicSync === 'function') {
+              startPeriodicSync(3); // Sync every 3 minutes
+              console.log('Periodic sync started');
+            }
+          } else {
+            console.warn('Initial data synchronization failed, changes may not persist after reload');
+            
+            // Still start periodic sync to try again later
+            if (typeof startPeriodicSync === 'function') {
+              startPeriodicSync(2); // Try more frequently (every 2 minutes) if initial sync failed
+              console.log('Periodic sync started with shorter interval due to initial sync failure');
+            }
+          }
+        });
+      }, 2000); // Delay initial sync to ensure UI is fully loaded
     }
     
     showMessage('Data loaded successfully', 'success');

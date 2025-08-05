@@ -2587,6 +2587,7 @@ function saveMember() {
   const image = document.getElementById('memberImage').value || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&h=150&fit=crop&crop=face';
 
   let memberToSync;
+  let weeklyFeeToSync;
   let isNewItem = false;
   let originalMember = null;
   let originalWeeklyFee = null;
@@ -2615,6 +2616,7 @@ function saveMember() {
       // Store original weekly fee for rollback if needed
       originalWeeklyFee = JSON.parse(JSON.stringify(appData.weeklyFees[feeIndex]));
       appData.weeklyFees[feeIndex].memberName = name;
+      weeklyFeeToSync = appData.weeklyFees[feeIndex];
     }
   } else {
     isNewItem = true;
@@ -2640,6 +2642,7 @@ function saveMember() {
       ]
     };
     appData.weeklyFees.push(newWeeklyFee);
+    weeklyFeeToSync = newWeeklyFee;
   }
 
   renderMembers();
@@ -2648,11 +2651,28 @@ function saveMember() {
   
   // Sync with server
   if (memberToSync) {
-    syncMember(memberToSync).then(success => {
-      if (success) {
-        showMessage(currentEditingItem ? 'Member updated successfully' : 'Member added successfully');
+    syncMember(memberToSync).then(memberSuccess => {
+      if (memberSuccess) {
+        // If member sync was successful, sync the weekly fee record
+        if (weeklyFeeToSync) {
+          // Update the memberId with the MongoDB _id if this is a new member
+          if (isNewItem && memberToSync._id) {
+            weeklyFeeToSync.memberId = memberToSync._id;
+          }
+          
+          syncWeeklyFee(weeklyFeeToSync).then(feeSuccess => {
+            if (feeSuccess) {
+              showMessage(currentEditingItem ? 'Member updated successfully' : 'Member added successfully');
+            } else {
+              // Weekly fee sync failed but member sync succeeded
+              showMessage(currentEditingItem ? 'Member updated but weekly fee sync failed' : 'Member added but weekly fee sync failed. Changes may not persist after reload.', 'warning');
+            }
+          });
+        } else {
+          showMessage(currentEditingItem ? 'Member updated successfully' : 'Member added successfully');
+        }
       } else {
-        // Rollback if sync failed
+        // Rollback if member sync failed
         if (isNewItem) {
           // For new members, delete the _id if it was assigned
           if (memberToSync._id) {
@@ -2716,6 +2736,7 @@ function editMember(id) {
 function deleteMember(id) {
   if (confirm('Are you sure you want to delete this member?')) {
     const memberToDelete = appData.members.find(function(m) { return m.id === id; });
+    const weeklyFeeToDelete = appData.weeklyFees.find(function(f) { return f.memberId === id; });
     
     // Store copies of the current state for potential rollback
     const membersCopy = JSON.parse(JSON.stringify(appData.members));
@@ -2732,11 +2753,23 @@ function deleteMember(id) {
     
     // Sync with server
     if (memberToDelete) {
-      syncMember(memberToDelete, true).then(success => {
-        if (success) {
+      // First delete the weekly fee record if it exists
+      const weeklyFeePromise = weeklyFeeToDelete ? 
+        syncWeeklyFee(weeklyFeeToDelete, true) : 
+        Promise.resolve(true);
+      
+      weeklyFeePromise.then(feeSuccess => {
+        if (!feeSuccess) {
+          console.warn('Failed to delete weekly fee record from server');
+        }
+        
+        // Then delete the member
+        return syncMember(memberToDelete, true);
+      }).then(memberSuccess => {
+        if (memberSuccess) {
           showMessage('Member deleted successfully');
         } else {
-          // Rollback if sync failed
+          // Rollback if member sync failed
           appData.members = membersCopy;
           appData.weeklyFees = weeklyFeesCopy;
           
@@ -2747,6 +2780,19 @@ function deleteMember(id) {
           
           showMessage('Failed to delete member from server. Changes reverted.', 'error');
         }
+      }).catch(error => {
+        console.error('Error during member deletion:', error);
+        
+        // Rollback on any error
+        appData.members = membersCopy;
+        appData.weeklyFees = weeklyFeesCopy;
+        
+        // Update UI after rollback
+        renderMembers();
+        renderWeeklyFees();
+        updateDashboardMetrics();
+        
+        showMessage('Error during member deletion. Changes reverted.', 'error');
       });
     } else {
       showMessage('Member deleted successfully');
@@ -3182,15 +3228,33 @@ function saveGalleryItem() {
     
     // Sync with server
     if (galleryItemToSync) {
+      // Show a loading message while syncing
+      showMessage('Uploading photo to server...', 'info');
+      
       syncGalleryItem(galleryItemToSync).then(success => {
         if (success) {
-          showMessage('Photo added successfully');
+          showMessage('Photo added and synced with server successfully', 'success');
         } else {
           // If sync failed and this was a new gallery item, we need to rollback the _id assignment
           if (galleryItemToSync._id) {
             delete galleryItemToSync._id;
           }
-          showMessage('Photo added locally, but failed to sync with server. Changes may not persist after reload.', 'warning');
+          // Mark the item as needing sync
+          galleryItemToSync.needsSync = true;
+          showMessage('Photo added locally, but failed to sync with server. The system will automatically retry syncing later.', 'warning');
+          
+          // Schedule a retry in 30 seconds
+          setTimeout(() => {
+            if (galleryItemToSync.needsSync) {
+              console.log('Attempting to re-sync gallery item...');
+              syncGalleryItem(galleryItemToSync).then(retrySuccess => {
+                if (retrySuccess) {
+                  delete galleryItemToSync.needsSync;
+                  showMessage('Photo successfully synced with server', 'success');
+                }
+              });
+            }
+          }, 30000);
         }
       });
     } else {
@@ -3283,6 +3347,9 @@ function togglePaymentStatus(memberId, paymentDate) {
   const payment = feeRecord.payments.find(function(p) { return p.date === paymentDate; });
   if (!payment) return;
   
+  // Store original status for potential rollback
+  const originalStatus = payment.status;
+  
   // Cycle through statuses: pending -> paid -> overdue -> pending
   if (payment.status === 'pending') {
     payment.status = 'paid';
@@ -3292,9 +3359,32 @@ function togglePaymentStatus(memberId, paymentDate) {
     payment.status = 'pending';
   }
   
+  // Update UI immediately
   renderWeeklyFees();
   updateDashboardMetrics();
-  showMessage('Payment status updated to ' + payment.status);
+  
+  // Create a copy of the fee record for sync
+  const feeRecordToSync = JSON.parse(JSON.stringify(feeRecord));
+  
+  // Sync with server
+  syncWeeklyFee(feeRecordToSync).then(success => {
+    if (success) {
+      showMessage('Payment status updated to ' + payment.status);
+    } else {
+      // Rollback if sync failed
+      payment.status = originalStatus;
+      renderWeeklyFees();
+      updateDashboardMetrics();
+      showMessage('Payment status updated locally, but failed to sync with server', 'warning');
+    }
+  }).catch(error => {
+    console.error('Error syncing payment status:', error);
+    // Rollback on error
+    payment.status = originalStatus;
+    renderWeeklyFees();
+    updateDashboardMetrics();
+    showMessage('Error updating payment status. Changes reverted.', 'error');
+  });
 }
 
 // PDF Export Functions (simplified for brevity)

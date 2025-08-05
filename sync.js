@@ -1,5 +1,75 @@
 // Data Synchronization Functions for Ledo Sports Academy
 
+// Variable to store the interval ID for periodic sync
+let syncIntervalId = null;
+
+// Function to check for unsynchronized items
+function checkUnsyncedItems() {
+  let unsyncedCount = 0;
+  
+  // Check all data types for items marked as needing sync
+  if (appData.gallery) {
+    unsyncedCount += appData.gallery.filter(item => item.needsSync).length;
+  }
+  
+  // Add checks for other data types as needed
+  
+  return unsyncedCount;
+}
+
+// Function to start periodic synchronization
+function startPeriodicSync(intervalMinutes = 5) {
+  // Clear any existing interval
+  if (syncIntervalId) {
+    clearInterval(syncIntervalId);
+  }
+  
+  // Convert minutes to milliseconds
+  const intervalMs = intervalMinutes * 60 * 1000;
+  
+  // Set up new interval
+  syncIntervalId = setInterval(() => {
+    console.log('Running periodic data synchronization...');
+    
+    // Check for unsynced items before syncing
+    const unsyncedBefore = checkUnsyncedItems();
+    
+    syncData().then(success => {
+      if (success) {
+        console.log('Periodic sync completed successfully');
+        
+        // Check if we had unsynced items that are now synced
+        const unsyncedAfter = checkUnsyncedItems();
+        if (unsyncedBefore > 0 && unsyncedAfter < unsyncedBefore) {
+          showMessage(`Successfully synchronized ${unsyncedBefore - unsyncedAfter} previously unsynced items`, 'success');
+        }
+      } else {
+        console.warn('Periodic sync failed, some changes may not be saved to server');
+        
+        // Check if we still have unsynced items
+        const unsyncedAfter = checkUnsyncedItems();
+        if (unsyncedAfter > 0) {
+          showMessage(`${unsyncedAfter} items still need to be synchronized with the server. Will retry later.`, 'warning');
+        }
+      }
+    });
+  }, intervalMs);
+  
+  console.log(`Periodic sync started, will run every ${intervalMinutes} minutes`);
+  return true;
+}
+
+// Function to stop periodic synchronization
+function stopPeriodicSync() {
+  if (syncIntervalId) {
+    clearInterval(syncIntervalId);
+    syncIntervalId = null;
+    console.log('Periodic sync stopped');
+    return true;
+  }
+  return false;
+}
+
 // Function to synchronize all data changes with the server
 async function syncData() {
   try {
@@ -8,17 +78,82 @@ async function syncData() {
     // First check if the server is available
     try {
       // Make a simple request to check server connectivity
-      await fetch('/api/health-check').then(response => {
-        if (!response.ok) {
-          throw new Error(`Server error: ${response.status}`);
-        }
-      });
+      const response = await fetch('/api/health-check');
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      }
+      
+      // Check MongoDB connection status from health check response
+      const healthData = await response.json();
+      if (healthData.database !== 'connected') {
+        throw new Error(`Database not connected: ${healthData.dbState}`);
+      }
     } catch (connectionError) {
       // If we can't connect to the server at all or get a server error
       console.error('Server connection error:', connectionError);
       showMessage('Cannot connect to server. Changes will only be saved locally.', 'error');
       return false;
     }
+    
+    // Synchronize all data types
+    const syncPromises = [];
+    
+    // Sync hero slides
+    appData.heroSlides.forEach(slide => {
+      syncPromises.push(syncHeroSlide(slide));
+    });
+    
+    // Sync activities
+    appData.activities.forEach(activity => {
+      syncPromises.push(syncActivity(activity));
+    });
+    
+    // Sync members
+    appData.members.forEach(member => {
+      syncPromises.push(syncMember(member));
+    });
+    
+    // Sync weekly fees
+    appData.weeklyFees.forEach(weeklyFee => {
+      syncPromises.push(syncWeeklyFee(weeklyFee));
+    });
+    
+    // Sync donations
+    appData.donations.forEach(donation => {
+      syncPromises.push(syncDonation(donation));
+    });
+    
+    // Sync expenses
+    appData.expenses.forEach(expense => {
+      syncPromises.push(syncExpense(expense));
+    });
+    
+    // Sync experiences
+    appData.experiences.forEach(experience => {
+      syncPromises.push(syncExperience(experience));
+    });
+    
+    // Sync gallery items - prioritize items that need sync
+    appData.gallery.forEach(item => {
+      // Prioritize items that were marked as needing sync
+      if (item.needsSync) {
+        console.log('Prioritizing sync for previously failed item:', item.id);
+        // Add with higher priority (at the beginning of the array)
+        syncPromises.unshift(syncGalleryItem(item).then(success => {
+          if (success) {
+            // Clear the needsSync flag if successful
+            delete item.needsSync;
+            console.log('Successfully synced previously failed item:', item.id);
+          }
+          return success;
+        }));
+      } else {
+        syncPromises.push(syncGalleryItem(item));
+      }
+    });
+    
+    // Wait for all sync operations to complete
+    await Promise.all(syncPromises);
     
     showMessage('Data synchronized successfully', 'success');
     return true;
@@ -181,27 +316,43 @@ async function syncExperience(experience, isDelete = false) {
 
 // Gallery Synchronization
 async function syncGalleryItem(item, isDelete = false) {
-  try {
-    if (isDelete) {
-      // For delete operations, we need to use the MongoDB _id if available
-      const idToDelete = item._id || item.id;
-      await galleryAPI.delete(idToDelete);
-    } else if (item._id) {
-      // For update operations, ensure we're using the MongoDB _id
-      await galleryAPI.update(item);
-    } else {
-      // For create operations
-      const result = await galleryAPI.create(item);
-      // Update the local item with the MongoDB _id for future operations
-      if (result && result._id) {
-        item._id = result._id;
+  const maxRetries = 3;
+  let retryCount = 0;
+  let success = false;
+  
+  while (retryCount < maxRetries && !success) {
+    try {
+      if (isDelete) {
+        // For delete operations, we need to use the MongoDB _id if available
+        const idToDelete = item._id || item.id;
+        await galleryAPI.delete(idToDelete);
+      } else if (item._id) {
+        // For update operations, ensure we're using the MongoDB _id
+        await galleryAPI.update(item);
+      } else {
+        // For create operations
+        const result = await galleryAPI.create(item);
+        // Update the local item with the MongoDB _id for future operations
+        if (result && result._id) {
+          item._id = result._id;
+        }
+      }
+      success = true;
+      return true;
+    } catch (error) {
+      retryCount++;
+      console.error(`Failed to sync gallery item (attempt ${retryCount}/${maxRetries}):`, error);
+      
+      if (retryCount < maxRetries) {
+        // Wait before retrying (exponential backoff)
+        const waitTime = Math.pow(2, retryCount) * 1000; // 2s, 4s, 8s
+        console.log(`Retrying in ${waitTime/1000} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
       }
     }
-    return true;
-  } catch (error) {
-    console.error('Failed to sync gallery item:', error);
-    return false;
   }
+  
+  return success;
 }
 
 // Toggle Top 5 Status Synchronization
@@ -235,6 +386,41 @@ async function syncUpdateTop5Order(items) {
     return true;
   } catch (error) {
     console.error('Failed to sync top 5 order:', error);
+    return false;
+  }
+}
+
+// Weekly Fees Synchronization
+async function syncWeeklyFee(weeklyFee, isDelete = false) {
+  try {
+    if (isDelete) {
+      // For delete operations, we need to use the MongoDB _id if available
+      const idToDelete = weeklyFee._id || weeklyFee.memberId;
+      await weeklyFeesAPI.deletePayment(idToDelete, weeklyFee.paymentId);
+    } else if (weeklyFee._id) {
+      // For update operations, ensure we're using the MongoDB _id
+      if (weeklyFee.paymentId) {
+        // Update specific payment
+        await weeklyFeesAPI.updatePayment(weeklyFee._id, weeklyFee.paymentId, weeklyFee);
+      } else {
+        // Add new payment
+        await weeklyFeesAPI.addPayment(weeklyFee._id, weeklyFee);
+      }
+    } else {
+      // For create operations of new weekly fee record
+      const result = await weeklyFeesAPI.addPayment(weeklyFee.memberId, {
+        date: weeklyFee.payments[0].date,
+        amount: weeklyFee.payments[0].amount,
+        status: weeklyFee.payments[0].status
+      });
+      // Update the local weekly fee with the MongoDB _id for future operations
+      if (result && result._id) {
+        weeklyFee._id = result._id;
+      }
+    }
+    return true;
+  } catch (error) {
+    console.error('Failed to sync weekly fee:', error);
     return false;
   }
 }
