@@ -33,11 +33,19 @@ async function syncData() {
 async function syncHeroSlide(slide, isDelete = false) {
   try {
     if (isDelete) {
-      await heroSlidesAPI.delete(slide.id);
+      // For delete operations, we need to use the MongoDB _id if available
+      const idToDelete = slide._id || slide.id;
+      await heroSlidesAPI.delete(idToDelete);
     } else if (slide._id) {
+      // For update operations, ensure we're using the MongoDB _id
       await heroSlidesAPI.update(slide);
     } else {
-      await heroSlidesAPI.create(slide);
+      // For create operations
+      const result = await heroSlidesAPI.create(slide);
+      // Update the local slide with the MongoDB _id for future operations
+      if (result && result._id) {
+        slide._id = result._id;
+      }
     }
     return true;
   } catch (error) {
@@ -50,11 +58,19 @@ async function syncHeroSlide(slide, isDelete = false) {
 async function syncActivity(activity, isDelete = false) {
   try {
     if (isDelete) {
-      await activitiesAPI.delete(activity.id);
+      // For delete operations, we need to use the MongoDB _id if available
+      const idToDelete = activity._id || activity.id;
+      await activitiesAPI.delete(idToDelete);
     } else if (activity._id) {
+      // For update operations, ensure we're using the MongoDB _id
       await activitiesAPI.update(activity);
     } else {
-      await activitiesAPI.create(activity);
+      // For create operations
+      const result = await activitiesAPI.create(activity);
+      // Update the local activity with the MongoDB _id for future operations
+      if (result && result._id) {
+        activity._id = result._id;
+      }
     }
     return true;
   } catch (error) {
@@ -67,11 +83,19 @@ async function syncActivity(activity, isDelete = false) {
 async function syncMember(member, isDelete = false) {
   try {
     if (isDelete) {
-      await membersAPI.delete(member.id);
+      // For delete operations, we need to use the MongoDB _id if available
+      const idToDelete = member._id || member.id;
+      await membersAPI.delete(idToDelete);
     } else if (member._id) {
+      // For update operations, ensure we're using the MongoDB _id
       await membersAPI.update(member);
     } else {
-      await membersAPI.create(member);
+      // For create operations
+      const result = await membersAPI.create(member);
+      // Update the local member with the MongoDB _id for future operations
+      if (result && result._id) {
+        member._id = result._id;
+      }
     }
     return true;
   } catch (error) {
@@ -84,11 +108,19 @@ async function syncMember(member, isDelete = false) {
 async function syncDonation(donation, isDelete = false) {
   try {
     if (isDelete) {
-      await donationsAPI.delete(donation.id);
+      // For delete operations, we need to use the MongoDB _id if available
+      const idToDelete = donation._id || donation.id;
+      await donationsAPI.delete(idToDelete);
     } else if (donation._id) {
+      // For update operations, ensure we're using the MongoDB _id
       await donationsAPI.update(donation);
     } else {
-      await donationsAPI.create(donation);
+      // For create operations
+      const result = await donationsAPI.create(donation);
+      // Update the local donation with the MongoDB _id for future operations
+      if (result && result._id) {
+        donation._id = result._id;
+      }
     }
     return true;
   } catch (error) {
@@ -101,11 +133,19 @@ async function syncDonation(donation, isDelete = false) {
 async function syncExpense(expense, isDelete = false) {
   try {
     if (isDelete) {
-      await expensesAPI.delete(expense.id);
+      // For delete operations, we need to use the MongoDB _id if available
+      const idToDelete = expense._id || expense.id;
+      await expensesAPI.delete(idToDelete);
     } else if (expense._id) {
+      // For update operations, ensure we're using the MongoDB _id
       await expensesAPI.update(expense);
     } else {
-      await expensesAPI.create(expense);
+      // For create operations
+      const result = await expensesAPI.create(expense);
+      // Update the local expense with the MongoDB _id for future operations
+      if (result && result._id) {
+        expense._id = result._id;
+      }
     }
     return true;
   } catch (error) {
@@ -118,11 +158,19 @@ async function syncExpense(expense, isDelete = false) {
 async function syncExperience(experience, isDelete = false) {
   try {
     if (isDelete) {
-      await experiencesAPI.delete(experience.id);
+      // For delete operations, we need to use the MongoDB _id if available
+      const idToDelete = experience._id || experience.id;
+      await experiencesAPI.delete(idToDelete);
     } else if (experience._id) {
+      // For update operations, ensure we're using the MongoDB _id
       await experiencesAPI.update(experience);
     } else {
-      await experiencesAPI.create(experience);
+      // For create operations
+      const result = await experiencesAPI.create(experience);
+      // Update the local experience with the MongoDB _id for future operations
+      if (result && result._id) {
+        experience._id = result._id;
+      }
     }
     return true;
   } catch (error) {
@@ -135,11 +183,19 @@ async function syncExperience(experience, isDelete = false) {
 async function syncGalleryItem(item, isDelete = false) {
   try {
     if (isDelete) {
-      await galleryAPI.delete(item.id);
+      // For delete operations, we need to use the MongoDB _id if available
+      const idToDelete = item._id || item.id;
+      await galleryAPI.delete(idToDelete);
     } else if (item._id) {
+      // For update operations, ensure we're using the MongoDB _id
       await galleryAPI.update(item);
     } else {
-      await galleryAPI.create(item);
+      // For create operations
+      const result = await galleryAPI.create(item);
+      // Update the local item with the MongoDB _id for future operations
+      if (result && result._id) {
+        item._id = result._id;
+      }
     }
     return true;
   } catch (error) {
@@ -151,7 +207,11 @@ async function syncGalleryItem(item, isDelete = false) {
 // Toggle Top 5 Status Synchronization
 async function syncToggleTop5(photoId) {
   try {
-    await galleryAPI.toggleTop5(photoId);
+    // Find the photo in the gallery to get its MongoDB _id if available
+    const photo = appData.gallery.find(p => p.id === photoId);
+    const idToToggle = photo && photo._id ? photo._id : photoId;
+    
+    await galleryAPI.toggleTop5(idToToggle);
     return true;
   } catch (error) {
     console.error('Failed to sync top 5 status:', error);
@@ -162,7 +222,16 @@ async function syncToggleTop5(photoId) {
 // Update Top 5 Order Synchronization
 async function syncUpdateTop5Order(items) {
   try {
-    await galleryAPI.updateOrder(items);
+    // Ensure we're using MongoDB _id for each item
+    const itemsToSync = items.map(item => {
+      // Create a new object with the necessary properties
+      return {
+        _id: item._id || item.id, // Use MongoDB _id if available, otherwise use client id
+        top5Order: item.order || 0 // Use the client-side order property
+      };
+    });
+    
+    await galleryAPI.updateOrder(itemsToSync);
     return true;
   } catch (error) {
     console.error('Failed to sync top 5 order:', error);

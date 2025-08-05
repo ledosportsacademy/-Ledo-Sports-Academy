@@ -1133,8 +1133,10 @@ function toggleTop5(photoId) {
   const photo = appData.gallery.find(function(p) { return p.id === photoId; });
   if (!photo) return;
   
+  // Store original state for rollback if needed
   let wasTopFive = photo.isTopFive;
   let oldOrder = photo.order;
+  let originalPhoto = JSON.parse(JSON.stringify(photo));
   
   if (photo.isTopFive) {
     // Remove from top 5
@@ -1179,16 +1181,14 @@ function toggleTop5(photoId) {
     } else {
       // Revert changes if sync failed
       showMessage('Failed to update featured status on server. Changes may not persist after reload.', 'warning');
-      if (wasTopFive !== photo.isTopFive) {
-        photo.isTopFive = wasTopFive;
-        photo.order = oldOrder;
-        renderTop5Gallery();
-        renderGalleryGrid();
-        updateHeroSlidesFromGallery();
-        renderHeroSlideshow();
-        if (isCurrentlyOnHome) {
-          startSlideshow();
-        }
+      // Restore all original properties including _id
+      Object.assign(photo, originalPhoto);
+      renderTop5Gallery();
+      renderGalleryGrid();
+      updateHeroSlidesFromGallery();
+      renderHeroSlideshow();
+      if (isCurrentlyOnHome) {
+        startSlideshow();
       }
     }
   });
@@ -2233,10 +2233,14 @@ function saveHeroSlide() {
   }
 
   let slideToSync;
+  let isNewItem = false;
   
   if (currentEditingItem) {
     const index = appData.heroSlides.findIndex(function(s) { return s.id === currentEditingItem; });
     if (index !== -1) {
+      // Store original state for rollback if needed
+      const originalItem = JSON.parse(JSON.stringify(appData.heroSlides[index]));
+      
       appData.heroSlides[index] = Object.assign({}, appData.heroSlides[index], { 
         title: title, 
         subtitle: subtitle, 
@@ -2248,6 +2252,34 @@ function saveHeroSlide() {
         openNewTab: openNewTab 
       });
       slideToSync = appData.heroSlides[index];
+      
+      // Update UI
+      renderHeroManagement();
+      renderHeroSlideshow();
+      if (isCurrentlyOnHome) {
+        startSlideshow();
+      }
+      
+      // Sync with server
+      if (slideToSync) {
+        syncHeroSlide(slideToSync).then(success => {
+          if (success) {
+            showMessage('Hero slide updated successfully');
+          } else {
+            // Revert changes if sync failed
+            showMessage('Hero slide updated locally, but failed to sync with server. Changes may not persist after reload.', 'warning');
+            // Restore original item
+            appData.heroSlides[index] = originalItem;
+            renderHeroManagement();
+            renderHeroSlideshow();
+            if (isCurrentlyOnHome) {
+              startSlideshow();
+            }
+          }
+        });
+      } else {
+        showMessage('Hero slide updated successfully');
+      }
     }
   } else {
     const newId = Math.max.apply(Math, appData.heroSlides.map(function(s) { return s.id; }).concat([0])) + 1;
@@ -2264,25 +2296,31 @@ function saveHeroSlide() {
     };
     appData.heroSlides.push(newSlide);
     slideToSync = newSlide;
-  }
-
-  renderHeroManagement();
-  renderHeroSlideshow();
-  if (isCurrentlyOnHome) {
-    startSlideshow();
-  }
-  
-  // Sync with server
-  if (slideToSync) {
-    syncHeroSlide(slideToSync).then(success => {
-      if (success) {
-        showMessage(currentEditingItem ? 'Hero slide updated successfully' : 'Hero slide added successfully');
-      } else {
-        showMessage(currentEditingItem ? 'Hero slide updated locally, but failed to sync with server' : 'Hero slide added locally, but failed to sync with server', 'warning');
-      }
-    });
-  } else {
-    showMessage(currentEditingItem ? 'Hero slide updated successfully' : 'Hero slide added successfully');
+    isNewItem = true;
+    
+    // Update UI
+    renderHeroManagement();
+    renderHeroSlideshow();
+    if (isCurrentlyOnHome) {
+      startSlideshow();
+    }
+    
+    // Sync with server
+    if (slideToSync) {
+      syncHeroSlide(slideToSync).then(success => {
+        if (success) {
+          showMessage('Hero slide added successfully');
+        } else {
+          // If sync failed and this was a new slide, we need to rollback the _id assignment
+          if (slideToSync._id) {
+            delete slideToSync._id;
+          }
+          showMessage('Hero slide added locally, but failed to sync with server. Changes may not persist after reload.', 'warning');
+        }
+      });
+    } else {
+      showMessage('Hero slide added successfully');
+    }
   }
 }
 
@@ -2321,7 +2359,15 @@ function editHeroSlide(id) {
 function deleteHeroSlide(id) {
   if (confirm('Are you sure you want to delete this hero slide?')) {
     const slideToDelete = appData.heroSlides.find(function(s) { return s.id === id; });
+    
+    // Store a copy of the slide and the current heroSlides array for potential rollback
+    const slideCopy = slideToDelete ? JSON.parse(JSON.stringify(slideToDelete)) : null;
+    const heroSlidesCopy = JSON.parse(JSON.stringify(appData.heroSlides));
+    
+    // Remove from local data
     appData.heroSlides = appData.heroSlides.filter(function(s) { return s.id !== id; });
+    
+    // Update UI
     renderHeroManagement();
     renderHeroSlideshow();
     if (isCurrentlyOnHome) {
@@ -2334,7 +2380,17 @@ function deleteHeroSlide(id) {
         if (success) {
           showMessage('Hero slide deleted successfully');
         } else {
-          showMessage('Hero slide deleted locally, but failed to sync with server', 'warning');
+          // Rollback if sync failed
+          appData.heroSlides = heroSlidesCopy;
+          
+          // Update UI after rollback
+          renderHeroManagement();
+          renderHeroSlideshow();
+          if (isCurrentlyOnHome) {
+            startSlideshow();
+          }
+          
+          showMessage('Failed to delete hero slide from server. Changes reverted.', 'error');
         }
       });
     } else {
@@ -2361,10 +2417,14 @@ function saveActivity() {
   }
 
   let activityToSync;
+  let isNewItem = false;
   
   if (currentEditingItem) {
     const index = appData.activities.findIndex(function(a) { return a.id === currentEditingItem; });
     if (index !== -1) {
+      // Store original state for rollback if needed
+      const originalItem = JSON.parse(JSON.stringify(appData.activities[index]));
+      
       appData.activities[index] = Object.assign({}, appData.activities[index], { 
         title: title, 
         date: date, 
@@ -2376,6 +2436,32 @@ function saveActivity() {
         openNewTab: openNewTab
       });
       activityToSync = appData.activities[index];
+      
+      // Update UI
+      renderActivities();
+      renderHomeEvents();
+      renderRecentActivities();
+      updateDashboardMetrics();
+      
+      // Sync with server
+      if (activityToSync) {
+        syncActivity(activityToSync).then(success => {
+          if (success) {
+            showMessage('Activity updated successfully');
+          } else {
+            // Revert changes if sync failed
+            showMessage('Activity updated locally, but failed to sync with server. Changes may not persist after reload.', 'warning');
+            // Restore original item
+            appData.activities[index] = originalItem;
+            renderActivities();
+            renderHomeEvents();
+            renderRecentActivities();
+            updateDashboardMetrics();
+          }
+        });
+      } else {
+        showMessage('Activity updated successfully');
+      }
     }
   } else {
     const newId = Math.max.apply(Math, appData.activities.map(function(a) { return a.id; }).concat([0])) + 1;
@@ -2392,24 +2478,30 @@ function saveActivity() {
     };
     appData.activities.push(newActivity);
     activityToSync = newActivity;
-  }
-
-  renderActivities();
-  renderHomeEvents();
-  renderRecentActivities();
-  updateDashboardMetrics();
-  
-  // Sync with server
-  if (activityToSync) {
-    syncActivity(activityToSync).then(success => {
-      if (success) {
-        showMessage(currentEditingItem ? 'Activity updated successfully' : 'Activity added successfully');
-      } else {
-        showMessage(currentEditingItem ? 'Activity updated locally, but failed to sync with server' : 'Activity added locally, but failed to sync with server', 'warning');
-      }
-    });
-  } else {
-    showMessage(currentEditingItem ? 'Activity updated successfully' : 'Activity added successfully');
+    isNewItem = true;
+    
+    // Update UI
+    renderActivities();
+    renderHomeEvents();
+    renderRecentActivities();
+    updateDashboardMetrics();
+    
+    // Sync with server
+    if (activityToSync) {
+      syncActivity(activityToSync).then(success => {
+        if (success) {
+          showMessage('Activity added successfully');
+        } else {
+          // If sync failed and this was a new activity, we need to rollback the _id assignment
+          if (activityToSync._id) {
+            delete activityToSync._id;
+          }
+          showMessage('Activity added locally, but failed to sync with server. Changes may not persist after reload.', 'warning');
+        }
+      });
+    } else {
+      showMessage('Activity added successfully');
+    }
   }
 }
 
@@ -2448,7 +2540,14 @@ function editActivity(id) {
 function deleteActivity(id) {
   if (confirm('Are you sure you want to delete this activity?')) {
     const activityToDelete = appData.activities.find(function(a) { return a.id === id; });
+    
+    // Store the original item for rollback if needed
+    const originalItem = JSON.parse(JSON.stringify(activityToDelete));
+    
+    // Remove the item from the activities array
     appData.activities = appData.activities.filter(function(a) { return a.id !== id; });
+    
+    // Update UI
     renderActivities();
     renderHomeEvents();
     renderRecentActivities();
@@ -2460,7 +2559,17 @@ function deleteActivity(id) {
         if (success) {
           showMessage('Activity deleted successfully');
         } else {
-          showMessage('Activity deleted locally, but failed to sync with server', 'warning');
+          // Rollback if sync failed
+          showMessage('Failed to delete activity on server. Changes may not persist after reload.', 'warning');
+          
+          // Restore the item to the activities array
+          if (originalItem) {
+            appData.activities.push(originalItem);
+            renderActivities();
+            renderHomeEvents();
+            renderRecentActivities();
+            updateDashboardMetrics();
+          }
         }
       });
     } else {
@@ -2478,33 +2587,59 @@ function saveMember() {
   const image = document.getElementById('memberImage').value || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&h=150&fit=crop&crop=face';
 
   let memberToSync;
+  let isNewItem = false;
+  let originalMember = null;
+  let originalWeeklyFee = null;
+  let feeIndex = -1;
   
   if (currentEditingItem) {
     const index = appData.members.findIndex(function(m) { return m.id === currentEditingItem; });
     if (index !== -1) {
-      appData.members[index] = Object.assign({}, appData.members[index], { name: name, contact: contact, phone: phone, role: role, joinDate: joinDate, image: image });
+      // Store original state for rollback if needed
+      originalMember = JSON.parse(JSON.stringify(appData.members[index]));
+      
+      appData.members[index] = Object.assign({}, appData.members[index], { 
+        name: name, 
+        contact: contact, 
+        phone: phone, 
+        role: role, 
+        joinDate: joinDate, 
+        image: image 
+      });
       memberToSync = appData.members[index];
     }
     
     // Update weekly fees member name
-    const feeIndex = appData.weeklyFees.findIndex(function(f) { return f.memberId === currentEditingItem; });
+    feeIndex = appData.weeklyFees.findIndex(function(f) { return f.memberId === currentEditingItem; });
     if (feeIndex !== -1) {
+      // Store original weekly fee for rollback if needed
+      originalWeeklyFee = JSON.parse(JSON.stringify(appData.weeklyFees[feeIndex]));
       appData.weeklyFees[feeIndex].memberName = name;
     }
   } else {
+    isNewItem = true;
     const newId = Math.max.apply(Math, appData.members.map(function(m) { return m.id; }).concat([0])) + 1;
-    const newMember = { id: newId, name: name, contact: contact, phone: phone, role: role, joinDate: joinDate, image: image };
+    const newMember = { 
+      id: newId, 
+      name: name, 
+      contact: contact, 
+      phone: phone, 
+      role: role, 
+      joinDate: joinDate, 
+      image: image 
+    };
     appData.members.push(newMember);
     memberToSync = newMember;
     
     // Add weekly fee record for new member
-    appData.weeklyFees.push({
+    const newWeeklyFee = {
       memberId: newId,
       memberName: name,
       payments: [
         { date: "2025-08-03", amount: 20, status: "pending" }
       ]
-    });
+    };
+    appData.weeklyFees.push(newWeeklyFee);
   }
 
   renderMembers();
@@ -2517,7 +2652,32 @@ function saveMember() {
       if (success) {
         showMessage(currentEditingItem ? 'Member updated successfully' : 'Member added successfully');
       } else {
-        showMessage(currentEditingItem ? 'Member updated locally, but failed to sync with server' : 'Member added locally, but failed to sync with server', 'warning');
+        // Rollback if sync failed
+        if (isNewItem) {
+          // For new members, delete the _id if it was assigned
+          if (memberToSync._id) {
+            delete memberToSync._id;
+          }
+          showMessage('Member added locally, but failed to sync with server. Changes may not persist after reload.', 'warning');
+        } else {
+          // For existing members, restore the original state
+          const index = appData.members.findIndex(function(m) { return m.id === currentEditingItem; });
+          if (index !== -1 && originalMember) {
+            appData.members[index] = originalMember;
+          }
+          
+          // Restore weekly fee if it was modified
+          if (feeIndex !== -1 && originalWeeklyFee) {
+            appData.weeklyFees[feeIndex] = originalWeeklyFee;
+          }
+          
+          // Update UI after rollback
+          renderMembers();
+          renderWeeklyFees();
+          updateDashboardMetrics();
+          
+          showMessage('Member updated locally, but failed to sync with server. Changes reverted.', 'warning');
+        }
       }
     });
   } else {
@@ -2556,8 +2716,16 @@ function editMember(id) {
 function deleteMember(id) {
   if (confirm('Are you sure you want to delete this member?')) {
     const memberToDelete = appData.members.find(function(m) { return m.id === id; });
+    
+    // Store copies of the current state for potential rollback
+    const membersCopy = JSON.parse(JSON.stringify(appData.members));
+    const weeklyFeesCopy = JSON.parse(JSON.stringify(appData.weeklyFees));
+    
+    // Remove from local data
     appData.members = appData.members.filter(function(m) { return m.id !== id; });
     appData.weeklyFees = appData.weeklyFees.filter(function(f) { return f.memberId !== id; });
+    
+    // Update UI
     renderMembers();
     renderWeeklyFees();
     updateDashboardMetrics();
@@ -2568,7 +2736,16 @@ function deleteMember(id) {
         if (success) {
           showMessage('Member deleted successfully');
         } else {
-          showMessage('Member deleted locally, but failed to sync with server', 'warning');
+          // Rollback if sync failed
+          appData.members = membersCopy;
+          appData.weeklyFees = weeklyFeesCopy;
+          
+          // Update UI after rollback
+          renderMembers();
+          renderWeeklyFees();
+          updateDashboardMetrics();
+          
+          showMessage('Failed to delete member from server. Changes reverted.', 'error');
         }
       });
     } else {
@@ -2605,10 +2782,17 @@ function saveDonation() {
   
   // Sync with server
   if (donationToSync) {
+    // Store the original donation before sync in case we need to rollback
+    const originalDonation = JSON.parse(JSON.stringify(donationToSync));
+    
     syncDonation(donationToSync).then(success => {
       if (success) {
         showMessage(currentEditingItem ? 'Donation updated successfully' : 'Donation added successfully');
       } else {
+        // If sync failed and this was a new donation, we need to rollback the _id assignment
+        if (!currentEditingItem && donationToSync._id) {
+          delete donationToSync._id;
+        }
         showMessage(currentEditingItem ? 'Donation updated locally, but failed to sync with server' : 'Donation added locally, but failed to sync with server', 'warning');
       }
     });
@@ -2644,6 +2828,12 @@ function editDonation(id) {
 function deleteDonation(id) {
   if (confirm('Are you sure you want to delete this donation record?')) {
     const donationToDelete = appData.donations.find(function(d) { return d.id === id; });
+    
+    // Store a copy of the donation and the current donations array for potential rollback
+    const donationCopy = donationToDelete ? JSON.parse(JSON.stringify(donationToDelete)) : null;
+    const donationsCopy = JSON.parse(JSON.stringify(appData.donations));
+    
+    // Remove from local data
     appData.donations = appData.donations.filter(function(d) { return d.id !== id; });
     renderDonations();
     updateTotalDonations();
@@ -2656,7 +2846,13 @@ function deleteDonation(id) {
         if (success) {
           showMessage('Donation deleted successfully');
         } else {
-          showMessage('Donation deleted locally, but failed to sync with server', 'warning');
+          // Rollback if sync failed
+          appData.donations = donationsCopy;
+          renderDonations();
+          updateTotalDonations();
+          updateDashboardMetrics();
+          renderCharts();
+          showMessage('Failed to delete donation from server. Changes reverted.', 'error');
         }
       });
     } else {
@@ -2673,21 +2869,89 @@ function saveExpense() {
   const vendor = document.getElementById('expenseVendor').value;
   const paymentMethod = document.getElementById('expensePaymentMethod').value;
 
+  let expenseToSync;
+  let isNewItem = false;
+  
   if (currentEditingItem) {
     const index = appData.expenses.findIndex(function(e) { return e.id === currentEditingItem; });
     if (index !== -1) {
-      appData.expenses[index] = Object.assign({}, appData.expenses[index], { description: description, amount: amount, date: date, category: category, vendor: vendor, paymentMethod: paymentMethod });
+      // Store original state for rollback if needed
+      const originalItem = JSON.parse(JSON.stringify(appData.expenses[index]));
+      
+      appData.expenses[index] = Object.assign({}, appData.expenses[index], { 
+        description: description, 
+        amount: amount, 
+        date: date, 
+        category: category, 
+        vendor: vendor, 
+        paymentMethod: paymentMethod 
+      });
+      expenseToSync = appData.expenses[index];
+      
+      // Update UI
+      renderExpenses();
+      updateTotalExpenses();
+      updateDashboardMetrics();
+      renderCharts();
+      
+      // Sync with server
+      if (expenseToSync) {
+        syncExpense(expenseToSync).then(success => {
+          if (success) {
+            showMessage('Expense updated successfully');
+          } else {
+            // Revert changes if sync failed
+            showMessage('Expense updated locally, but failed to sync with server. Changes may not persist after reload.', 'warning');
+            // Restore original item
+            appData.expenses[index] = originalItem;
+            renderExpenses();
+            updateTotalExpenses();
+            updateDashboardMetrics();
+            renderCharts();
+          }
+        });
+      } else {
+        showMessage('Expense updated successfully');
+      }
     }
   } else {
     const newId = Math.max.apply(Math, appData.expenses.map(function(e) { return e.id; }).concat([0])) + 1;
-    appData.expenses.push({ id: newId, description: description, amount: amount, date: date, category: category, vendor: vendor, paymentMethod: paymentMethod });
+    const newExpense = { 
+      id: newId, 
+      description: description, 
+      amount: amount, 
+      date: date, 
+      category: category, 
+      vendor: vendor, 
+      paymentMethod: paymentMethod 
+    };
+    appData.expenses.push(newExpense);
+    expenseToSync = newExpense;
+    isNewItem = true;
+    
+    // Update UI
+    renderExpenses();
+    updateTotalExpenses();
+    updateDashboardMetrics();
+    renderCharts();
+    
+    // Sync with server
+    if (expenseToSync) {
+      syncExpense(expenseToSync).then(success => {
+        if (success) {
+          showMessage('Expense added successfully');
+        } else {
+          // If sync failed and this was a new expense, we need to rollback the _id assignment
+          if (expenseToSync._id) {
+            delete expenseToSync._id;
+          }
+          showMessage('Expense added locally, but failed to sync with server. Changes may not persist after reload.', 'warning');
+        }
+      });
+    } else {
+      showMessage('Expense added successfully');
+    }
   }
-
-  renderExpenses();
-  updateTotalExpenses();
-  updateDashboardMetrics();
-  renderCharts();
-  showMessage(currentEditingItem ? 'Expense updated successfully' : 'Expense added successfully');
 }
 
 function editExpense(id) {
@@ -2735,18 +2999,76 @@ function saveExperience() {
   const description = document.getElementById('experienceDescription').value;
   const image = document.getElementById('experienceImage').value || 'https://images.unsplash.com/photo-1579952363873-27d3bfad9c0d?w=400&h=300&fit=crop';
 
+  let experienceToSync;
+  let isNewItem = false;
+  
   if (currentEditingItem) {
     const index = appData.experiences.findIndex(function(e) { return e.id === currentEditingItem; });
     if (index !== -1) {
-      appData.experiences[index] = Object.assign({}, appData.experiences[index], { title: title, date: date, description: description, image: image });
+      // Store original state for rollback if needed
+      const originalItem = JSON.parse(JSON.stringify(appData.experiences[index]));
+      
+      appData.experiences[index] = Object.assign({}, appData.experiences[index], { 
+        title: title, 
+        date: date, 
+        description: description, 
+        image: image 
+      });
+      experienceToSync = appData.experiences[index];
+      
+      // Update UI
+      renderExperiences();
+      
+      // Sync with server
+      if (experienceToSync) {
+        syncExperience(experienceToSync).then(success => {
+          if (success) {
+            showMessage('Experience updated successfully');
+          } else {
+            // Revert changes if sync failed
+            showMessage('Experience updated locally, but failed to sync with server. Changes may not persist after reload.', 'warning');
+            // Restore original item
+            appData.experiences[index] = originalItem;
+            renderExperiences();
+          }
+        });
+      } else {
+        showMessage('Experience updated successfully');
+      }
     }
   } else {
     const newId = Math.max.apply(Math, appData.experiences.map(function(e) { return e.id; }).concat([0])) + 1;
-    appData.experiences.push({ id: newId, title: title, date: date, description: description, image: image });
+    const newExperience = { 
+      id: newId, 
+      title: title, 
+      date: date, 
+      description: description, 
+      image: image 
+    };
+    appData.experiences.push(newExperience);
+    experienceToSync = newExperience;
+    isNewItem = true;
+    
+    // Update UI
+    renderExperiences();
+    
+    // Sync with server
+    if (experienceToSync) {
+      syncExperience(experienceToSync).then(success => {
+        if (success) {
+          showMessage('Experience added successfully');
+        } else {
+          // If sync failed and this was a new experience, we need to rollback the _id assignment
+          if (experienceToSync._id) {
+            delete experienceToSync._id;
+          }
+          showMessage('Experience added locally, but failed to sync with server. Changes may not persist after reload.', 'warning');
+        }
+      });
+    } else {
+      showMessage('Experience added successfully');
+    }
   }
-
-  renderExperiences();
-  showMessage(currentEditingItem ? 'Experience updated successfully' : 'Experience added successfully');
 }
 
 function editExperience(id) {
@@ -2775,9 +3097,31 @@ function editExperience(id) {
 
 function deleteExperience(id) {
   if (confirm('Are you sure you want to delete this experience?')) {
+    const experienceToDelete = appData.experiences.find(function(e) { return e.id === id; });
+    
+    // Store a copy of the experience and the current experiences array for potential rollback
+    const experienceCopy = experienceToDelete ? JSON.parse(JSON.stringify(experienceToDelete)) : null;
+    const experiencesCopy = JSON.parse(JSON.stringify(appData.experiences));
+    
+    // Remove from local data
     appData.experiences = appData.experiences.filter(function(e) { return e.id !== id; });
     renderExperiences();
-    showMessage('Experience deleted successfully');
+    
+    // Sync with server
+    if (experienceToDelete) {
+      syncExperience(experienceToDelete, true).then(success => {
+        if (success) {
+          showMessage('Experience deleted successfully');
+        } else {
+          // Rollback if sync failed
+          appData.experiences = experiencesCopy;
+          renderExperiences();
+          showMessage('Failed to delete experience from server. Changes reverted.', 'error');
+        }
+      });
+    } else {
+      showMessage('Experience deleted successfully');
+    }
   }
 }
 
@@ -2794,12 +3138,33 @@ function saveGalleryItem() {
   }
 
   let galleryItemToSync;
+  let isNewItem = false;
   
   if (currentEditingItem) {
     const index = appData.gallery.findIndex(function(g) { return g.id === currentEditingItem; });
     if (index !== -1) {
+      // Store original state for rollback if needed
+      const originalItem = JSON.parse(JSON.stringify(appData.gallery[index]));
+      
       appData.gallery[index] = Object.assign({}, appData.gallery[index], { title: title, url: url, album: album });
       galleryItemToSync = appData.gallery[index];
+      
+      // Sync with server
+      if (galleryItemToSync) {
+        syncGalleryItem(galleryItemToSync).then(success => {
+          if (success) {
+            showMessage('Photo updated successfully');
+          } else {
+            // Revert changes if sync failed
+            showMessage('Photo updated locally, but failed to sync with server. Changes may not persist after reload.', 'warning');
+            // Restore original item
+            appData.gallery[index] = originalItem;
+            renderGallery();
+          }
+        });
+      } else {
+        showMessage('Photo updated successfully');
+      }
     }
   } else {
     const newId = Math.max.apply(Math, appData.gallery.map(function(g) { return g.id; }).concat([0])) + 1;
@@ -2813,22 +3178,27 @@ function saveGalleryItem() {
     };
     appData.gallery.push(newGalleryItem);
     galleryItemToSync = newGalleryItem;
+    isNewItem = true;
+    
+    // Sync with server
+    if (galleryItemToSync) {
+      syncGalleryItem(galleryItemToSync).then(success => {
+        if (success) {
+          showMessage('Photo added successfully');
+        } else {
+          // If sync failed and this was a new gallery item, we need to rollback the _id assignment
+          if (galleryItemToSync._id) {
+            delete galleryItemToSync._id;
+          }
+          showMessage('Photo added locally, but failed to sync with server. Changes may not persist after reload.', 'warning');
+        }
+      });
+    } else {
+      showMessage('Photo added successfully');
+    }
   }
 
   renderGallery();
-  
-  // Sync with server
-  if (galleryItemToSync) {
-    syncGalleryItem(galleryItemToSync).then(success => {
-      if (success) {
-        showMessage(currentEditingItem ? 'Photo updated successfully' : 'Photo added successfully');
-      } else {
-        showMessage(currentEditingItem ? 'Photo updated locally, but failed to sync with server' : 'Photo added locally, but failed to sync with server', 'warning');
-      }
-    });
-  } else {
-    showMessage(currentEditingItem ? 'Photo updated successfully' : 'Photo added successfully');
-  }
 }
 
 function editGalleryItem(id) {
@@ -2856,7 +3226,14 @@ function editGalleryItem(id) {
 function deleteGalleryItem(id) {
   if (confirm('Are you sure you want to delete this photo?')) {
     const galleryItemToDelete = appData.gallery.find(function(g) { return g.id === id; });
+    
+    // Store the original item for rollback if needed
+    const originalItem = JSON.parse(JSON.stringify(galleryItemToDelete));
+    
+    // Remove the item from the gallery array
     appData.gallery = appData.gallery.filter(function(g) { return g.id !== id; });
+    
+    // Update UI
     renderGallery();
     
     // Update slideshow if a top 5 image was deleted
@@ -2872,7 +3249,23 @@ function deleteGalleryItem(id) {
         if (success) {
           showMessage('Photo deleted successfully');
         } else {
-          showMessage('Photo deleted locally, but failed to sync with server', 'warning');
+          // Rollback if sync failed
+          showMessage('Failed to delete photo on server. Changes may not persist after reload.', 'warning');
+          
+          // Restore the item to the gallery array
+          if (originalItem) {
+            appData.gallery.push(originalItem);
+            renderGallery();
+            
+            // If it was a top 5 photo, update the slideshow
+            if (originalItem.isTopFive) {
+              updateHeroSlidesFromGallery();
+              renderHeroSlideshow();
+              if (isCurrentlyOnHome) {
+                startSlideshow();
+              }
+            }
+          }
         }
       });
     } else {
