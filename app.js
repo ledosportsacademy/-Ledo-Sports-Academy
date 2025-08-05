@@ -1707,6 +1707,7 @@ function login() {
   renderGallery();
   renderHeroManagement();
   renderActivities(); // Re-render to show admin controls
+  renderWeeklyFees(); // Re-render to enable payment status controls
   
   showMessage('Successfully logged in as admin');
   console.log('Admin mode activated');
@@ -1721,6 +1722,7 @@ function logout() {
   renderGallery();
   renderHeroManagement();
   renderActivities(); // Re-render to hide admin controls
+  renderWeeklyFees(); // Re-render to disable payment status controls
   
   showMessage('Successfully logged out');
   console.log('Admin mode deactivated');
