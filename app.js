@@ -2160,9 +2160,11 @@ function createFeeCard(feeRecord) {
   const paymentsHTML = feeRecord.payments.map(function(payment) {
     const dateStr = new Date(payment.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     const cursor = isAdminMode ? 'pointer' : 'default';
+    // Properly format the payment ID parameter with escaped quotes
+    const paymentId = payment._id ? ', \'' + payment._id + '\'' : '';
     return '<div class="payment-item ' + payment.status + '">' +
       '<span>' + dateStr + '</span>' +
-      '<span class="status-badge ' + payment.status + '" onclick="togglePaymentStatus(' + feeRecord.memberId + ', \'' + payment.date + '\')" style="cursor: ' + cursor + ';">' +
+      '<span class="status-badge ' + payment.status + '" onclick="togglePaymentStatus(\'' + feeRecord.memberId + '\', \'' + payment.date + '\'' + paymentId + ')" style="cursor: ' + cursor + ';">' +
         payment.status +
       '</span>' +
     '</div>';
@@ -3340,13 +3342,18 @@ function deleteGalleryItem(id) {
   }
 }
 
-function togglePaymentStatus(memberId, paymentDate) {
+function togglePaymentStatus(memberId, paymentDate, paymentId) {
   if (!isAdminMode) return;
   
   const feeRecord = appData.weeklyFees.find(function(f) { return f.memberId === memberId; });
   if (!feeRecord) return;
   
-  const payment = feeRecord.payments.find(function(p) { return p.date === paymentDate; });
+  const payment = feeRecord.payments.find(function(p) {
+    if (paymentId) {
+      return p._id === paymentId;
+    }
+    return p.date === paymentDate;
+  });
   if (!payment) return;
   
   // Store original status for potential rollback
@@ -3367,6 +3374,10 @@ function togglePaymentStatus(memberId, paymentDate) {
   
   // Create a copy of the fee record for sync
   const feeRecordToSync = JSON.parse(JSON.stringify(feeRecord));
+  // Add payment ID for the specific payment being updated
+  feeRecordToSync.paymentId = paymentId || payment._id;
+  // Also add payment date as a fallback for finding the payment
+  feeRecordToSync.paymentDate = paymentDate;
   
   // Sync with server
   syncWeeklyFee(feeRecordToSync).then(success => {

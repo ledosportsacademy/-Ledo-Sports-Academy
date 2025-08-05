@@ -401,7 +401,24 @@ async function syncWeeklyFee(weeklyFee, isDelete = false) {
       // For update operations, ensure we're using the MongoDB _id
       if (weeklyFee.paymentId) {
         // Update specific payment
-        await weeklyFeesAPI.updatePayment(weeklyFee._id, weeklyFee.paymentId, weeklyFee);
+        const payment = weeklyFee.payments.find(p => p._id === weeklyFee.paymentId);
+        if (payment) {
+          await weeklyFeesAPI.updatePayment(weeklyFee._id, weeklyFee.paymentId, {
+            date: payment.date,
+            amount: payment.amount,
+            status: payment.status
+          });
+        } else {
+          // Find the payment by date if _id is not available
+          const paymentByDate = weeklyFee.payments.find(p => p.date === weeklyFee.paymentDate);
+          if (paymentByDate) {
+            await weeklyFeesAPI.updatePayment(weeklyFee._id, weeklyFee.paymentId, {
+              date: paymentByDate.date,
+              amount: paymentByDate.amount,
+              status: paymentByDate.status
+            });
+          }
+        }
       } else {
         // Add new payment
         await weeklyFeesAPI.addPayment(weeklyFee._id, weeklyFee);
