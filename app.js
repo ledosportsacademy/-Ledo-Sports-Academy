@@ -1080,6 +1080,9 @@ function setupTop5DragDrop(slot) {
 }
 
 function updateTop5Order(photoId, newOrder) {
+  // Store original state for rollback if needed
+  const originalGalleryState = JSON.parse(JSON.stringify(appData.gallery));
+  
   // Remove any existing photo from this order
   appData.gallery.forEach(function(photo) {
     if (photo.order === newOrder && photo.id !== photoId) {
@@ -1104,18 +1107,39 @@ function updateTop5Order(photoId, newOrder) {
     startSlideshow();
   }
   
-  showMessage('Featured photos updated successfully');
+  // Get all top 5 items for syncing
+  const top5Items = appData.gallery.filter(function(p) { return p.isTopFive; });
+  
+  // Sync with server
+  syncUpdateTop5Order(top5Items).then(success => {
+    if (success) {
+      showMessage('Featured photos updated successfully');
+    } else {
+      // Revert changes if sync failed
+      showMessage('Failed to update featured photos on server. Changes may not persist after reload.', 'warning');
+      appData.gallery = originalGalleryState;
+      renderTop5Gallery();
+      renderGalleryGrid();
+      updateHeroSlidesFromGallery();
+      renderHeroSlideshow();
+      if (isCurrentlyOnHome) {
+        startSlideshow();
+      }
+    }
+  });
 }
 
 function toggleTop5(photoId) {
   const photo = appData.gallery.find(function(p) { return p.id === photoId; });
   if (!photo) return;
   
+  let wasTopFive = photo.isTopFive;
+  let oldOrder = photo.order;
+  
   if (photo.isTopFive) {
     // Remove from top 5
     photo.isTopFive = false;
     photo.order = 0;
-    showMessage('Photo removed from featured photos');
   } else {
     // Add to top 5 - find next available order
     const usedOrders = appData.gallery
@@ -1133,7 +1157,6 @@ function toggleTop5(photoId) {
     if (nextOrder <= 5) {
       photo.isTopFive = true;
       photo.order = nextOrder;
-      showMessage('Photo added to featured photos');
     } else {
       showMessage('Maximum 5 featured photos allowed. Remove one first.', 'error');
       return;
@@ -1148,6 +1171,27 @@ function toggleTop5(photoId) {
   if (isCurrentlyOnHome) {
     startSlideshow();
   }
+  
+  // Sync with server
+  syncToggleTop5(photoId).then(success => {
+    if (success) {
+      showMessage(wasTopFive ? 'Photo removed from featured photos' : 'Photo added to featured photos');
+    } else {
+      // Revert changes if sync failed
+      showMessage('Failed to update featured status on server. Changes may not persist after reload.', 'warning');
+      if (wasTopFive !== photo.isTopFive) {
+        photo.isTopFive = wasTopFive;
+        photo.order = oldOrder;
+        renderTop5Gallery();
+        renderGalleryGrid();
+        updateHeroSlidesFromGallery();
+        renderHeroSlideshow();
+        if (isCurrentlyOnHome) {
+          startSlideshow();
+        }
+      }
+    }
+  });
 }
 
 // Lightbox Functions
@@ -2188,6 +2232,8 @@ function saveHeroSlide() {
     return;
   }
 
+  let slideToSync;
+  
   if (currentEditingItem) {
     const index = appData.heroSlides.findIndex(function(s) { return s.id === currentEditingItem; });
     if (index !== -1) {
@@ -2201,10 +2247,11 @@ function saveHeroSlide() {
         redirectUrl: redirectUrl, 
         openNewTab: openNewTab 
       });
+      slideToSync = appData.heroSlides[index];
     }
   } else {
     const newId = Math.max.apply(Math, appData.heroSlides.map(function(s) { return s.id; }).concat([0])) + 1;
-    appData.heroSlides.push({ 
+    const newSlide = { 
       id: newId, 
       title: title, 
       subtitle: subtitle, 
@@ -2214,7 +2261,9 @@ function saveHeroSlide() {
       ctaLink: ctaLink, 
       redirectUrl: redirectUrl, 
       openNewTab: openNewTab 
-    });
+    };
+    appData.heroSlides.push(newSlide);
+    slideToSync = newSlide;
   }
 
   renderHeroManagement();
@@ -2222,7 +2271,19 @@ function saveHeroSlide() {
   if (isCurrentlyOnHome) {
     startSlideshow();
   }
-  showMessage(currentEditingItem ? 'Hero slide updated successfully' : 'Hero slide added successfully');
+  
+  // Sync with server
+  if (slideToSync) {
+    syncHeroSlide(slideToSync).then(success => {
+      if (success) {
+        showMessage(currentEditingItem ? 'Hero slide updated successfully' : 'Hero slide added successfully');
+      } else {
+        showMessage(currentEditingItem ? 'Hero slide updated locally, but failed to sync with server' : 'Hero slide added locally, but failed to sync with server', 'warning');
+      }
+    });
+  } else {
+    showMessage(currentEditingItem ? 'Hero slide updated successfully' : 'Hero slide added successfully');
+  }
 }
 
 function editHeroSlide(id) {
@@ -2259,13 +2320,26 @@ function editHeroSlide(id) {
 
 function deleteHeroSlide(id) {
   if (confirm('Are you sure you want to delete this hero slide?')) {
+    const slideToDelete = appData.heroSlides.find(function(s) { return s.id === id; });
     appData.heroSlides = appData.heroSlides.filter(function(s) { return s.id !== id; });
     renderHeroManagement();
     renderHeroSlideshow();
     if (isCurrentlyOnHome) {
       startSlideshow();
     }
-    showMessage('Hero slide deleted successfully');
+    
+    // Sync with server
+    if (slideToDelete) {
+      syncHeroSlide(slideToDelete, true).then(success => {
+        if (success) {
+          showMessage('Hero slide deleted successfully');
+        } else {
+          showMessage('Hero slide deleted locally, but failed to sync with server', 'warning');
+        }
+      });
+    } else {
+      showMessage('Hero slide deleted successfully');
+    }
   }
 }
 
@@ -2286,6 +2360,8 @@ function saveActivity() {
     return;
   }
 
+  let activityToSync;
+  
   if (currentEditingItem) {
     const index = appData.activities.findIndex(function(a) { return a.id === currentEditingItem; });
     if (index !== -1) {
@@ -2299,10 +2375,11 @@ function saveActivity() {
         redirectUrl: redirectUrl,
         openNewTab: openNewTab
       });
+      activityToSync = appData.activities[index];
     }
   } else {
     const newId = Math.max.apply(Math, appData.activities.map(function(a) { return a.id; }).concat([0])) + 1;
-    appData.activities.push({ 
+    const newActivity = { 
       id: newId, 
       title: title, 
       date: date, 
@@ -2312,14 +2389,28 @@ function saveActivity() {
       status: status,
       redirectUrl: redirectUrl,
       openNewTab: openNewTab
-    });
+    };
+    appData.activities.push(newActivity);
+    activityToSync = newActivity;
   }
 
   renderActivities();
   renderHomeEvents();
   renderRecentActivities();
   updateDashboardMetrics();
-  showMessage(currentEditingItem ? 'Activity updated successfully' : 'Activity added successfully');
+  
+  // Sync with server
+  if (activityToSync) {
+    syncActivity(activityToSync).then(success => {
+      if (success) {
+        showMessage(currentEditingItem ? 'Activity updated successfully' : 'Activity added successfully');
+      } else {
+        showMessage(currentEditingItem ? 'Activity updated locally, but failed to sync with server' : 'Activity added locally, but failed to sync with server', 'warning');
+      }
+    });
+  } else {
+    showMessage(currentEditingItem ? 'Activity updated successfully' : 'Activity added successfully');
+  }
 }
 
 function editActivity(id) {
@@ -2356,12 +2447,25 @@ function editActivity(id) {
 
 function deleteActivity(id) {
   if (confirm('Are you sure you want to delete this activity?')) {
+    const activityToDelete = appData.activities.find(function(a) { return a.id === id; });
     appData.activities = appData.activities.filter(function(a) { return a.id !== id; });
     renderActivities();
     renderHomeEvents();
     renderRecentActivities();
     updateDashboardMetrics();
-    showMessage('Activity deleted successfully');
+    
+    // Sync with server
+    if (activityToDelete) {
+      syncActivity(activityToDelete, true).then(success => {
+        if (success) {
+          showMessage('Activity deleted successfully');
+        } else {
+          showMessage('Activity deleted locally, but failed to sync with server', 'warning');
+        }
+      });
+    } else {
+      showMessage('Activity deleted successfully');
+    }
   }
 }
 
@@ -2373,10 +2477,13 @@ function saveMember() {
   const joinDate = document.getElementById('memberJoinDate').value;
   const image = document.getElementById('memberImage').value || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&h=150&fit=crop&crop=face';
 
+  let memberToSync;
+  
   if (currentEditingItem) {
     const index = appData.members.findIndex(function(m) { return m.id === currentEditingItem; });
     if (index !== -1) {
       appData.members[index] = Object.assign({}, appData.members[index], { name: name, contact: contact, phone: phone, role: role, joinDate: joinDate, image: image });
+      memberToSync = appData.members[index];
     }
     
     // Update weekly fees member name
@@ -2386,7 +2493,9 @@ function saveMember() {
     }
   } else {
     const newId = Math.max.apply(Math, appData.members.map(function(m) { return m.id; }).concat([0])) + 1;
-    appData.members.push({ id: newId, name: name, contact: contact, phone: phone, role: role, joinDate: joinDate, image: image });
+    const newMember = { id: newId, name: name, contact: contact, phone: phone, role: role, joinDate: joinDate, image: image };
+    appData.members.push(newMember);
+    memberToSync = newMember;
     
     // Add weekly fee record for new member
     appData.weeklyFees.push({
@@ -2401,7 +2510,19 @@ function saveMember() {
   renderMembers();
   renderWeeklyFees();
   updateDashboardMetrics();
-  showMessage(currentEditingItem ? 'Member updated successfully' : 'Member added successfully');
+  
+  // Sync with server
+  if (memberToSync) {
+    syncMember(memberToSync).then(success => {
+      if (success) {
+        showMessage(currentEditingItem ? 'Member updated successfully' : 'Member added successfully');
+      } else {
+        showMessage(currentEditingItem ? 'Member updated locally, but failed to sync with server' : 'Member added locally, but failed to sync with server', 'warning');
+      }
+    });
+  } else {
+    showMessage(currentEditingItem ? 'Member updated successfully' : 'Member added successfully');
+  }
 }
 
 function editMember(id) {
@@ -2434,12 +2555,25 @@ function editMember(id) {
 
 function deleteMember(id) {
   if (confirm('Are you sure you want to delete this member?')) {
+    const memberToDelete = appData.members.find(function(m) { return m.id === id; });
     appData.members = appData.members.filter(function(m) { return m.id !== id; });
     appData.weeklyFees = appData.weeklyFees.filter(function(f) { return f.memberId !== id; });
     renderMembers();
     renderWeeklyFees();
     updateDashboardMetrics();
-    showMessage('Member deleted successfully');
+    
+    // Sync with server
+    if (memberToDelete) {
+      syncMember(memberToDelete, true).then(success => {
+        if (success) {
+          showMessage('Member deleted successfully');
+        } else {
+          showMessage('Member deleted locally, but failed to sync with server', 'warning');
+        }
+      });
+    } else {
+      showMessage('Member deleted successfully');
+    }
   }
 }
 
@@ -2449,21 +2583,38 @@ function saveDonation() {
   const date = document.getElementById('donationDate').value;
   const purpose = document.getElementById('donationPurpose').value;
 
+  let donationToSync;
+  
   if (currentEditingItem) {
     const index = appData.donations.findIndex(function(d) { return d.id === currentEditingItem; });
     if (index !== -1) {
       appData.donations[index] = Object.assign({}, appData.donations[index], { donorName: donorName, amount: amount, date: date, purpose: purpose });
+      donationToSync = appData.donations[index];
     }
   } else {
     const newId = Math.max.apply(Math, appData.donations.map(function(d) { return d.id; }).concat([0])) + 1;
-    appData.donations.push({ id: newId, donorName: donorName, amount: amount, date: date, purpose: purpose });
+    const newDonation = { id: newId, donorName: donorName, amount: amount, date: date, purpose: purpose };
+    appData.donations.push(newDonation);
+    donationToSync = newDonation;
   }
 
   renderDonations();
   updateTotalDonations();
   updateDashboardMetrics();
   renderCharts();
-  showMessage(currentEditingItem ? 'Donation updated successfully' : 'Donation added successfully');
+  
+  // Sync with server
+  if (donationToSync) {
+    syncDonation(donationToSync).then(success => {
+      if (success) {
+        showMessage(currentEditingItem ? 'Donation updated successfully' : 'Donation added successfully');
+      } else {
+        showMessage(currentEditingItem ? 'Donation updated locally, but failed to sync with server' : 'Donation added locally, but failed to sync with server', 'warning');
+      }
+    });
+  } else {
+    showMessage(currentEditingItem ? 'Donation updated successfully' : 'Donation added successfully');
+  }
 }
 
 function editDonation(id) {
@@ -2492,12 +2643,25 @@ function editDonation(id) {
 
 function deleteDonation(id) {
   if (confirm('Are you sure you want to delete this donation record?')) {
+    const donationToDelete = appData.donations.find(function(d) { return d.id === id; });
     appData.donations = appData.donations.filter(function(d) { return d.id !== id; });
     renderDonations();
     updateTotalDonations();
     updateDashboardMetrics();
     renderCharts();
-    showMessage('Donation deleted successfully');
+    
+    // Sync with server
+    if (donationToDelete) {
+      syncDonation(donationToDelete, true).then(success => {
+        if (success) {
+          showMessage('Donation deleted successfully');
+        } else {
+          showMessage('Donation deleted locally, but failed to sync with server', 'warning');
+        }
+      });
+    } else {
+      showMessage('Donation deleted successfully');
+    }
   }
 }
 
@@ -2629,25 +2793,42 @@ function saveGalleryItem() {
     return;
   }
 
+  let galleryItemToSync;
+  
   if (currentEditingItem) {
     const index = appData.gallery.findIndex(function(g) { return g.id === currentEditingItem; });
     if (index !== -1) {
       appData.gallery[index] = Object.assign({}, appData.gallery[index], { title: title, url: url, album: album });
+      galleryItemToSync = appData.gallery[index];
     }
   } else {
     const newId = Math.max.apply(Math, appData.gallery.map(function(g) { return g.id; }).concat([0])) + 1;
-    appData.gallery.push({ 
+    const newGalleryItem = { 
       id: newId, 
       title: title, 
       url: url, 
       album: album, 
       isTopFive: false, 
       order: 0 
-    });
+    };
+    appData.gallery.push(newGalleryItem);
+    galleryItemToSync = newGalleryItem;
   }
 
   renderGallery();
-  showMessage(currentEditingItem ? 'Photo updated successfully' : 'Photo added successfully');
+  
+  // Sync with server
+  if (galleryItemToSync) {
+    syncGalleryItem(galleryItemToSync).then(success => {
+      if (success) {
+        showMessage(currentEditingItem ? 'Photo updated successfully' : 'Photo added successfully');
+      } else {
+        showMessage(currentEditingItem ? 'Photo updated locally, but failed to sync with server' : 'Photo added locally, but failed to sync with server', 'warning');
+      }
+    });
+  } else {
+    showMessage(currentEditingItem ? 'Photo updated successfully' : 'Photo added successfully');
+  }
 }
 
 function editGalleryItem(id) {
@@ -2674,6 +2855,7 @@ function editGalleryItem(id) {
 
 function deleteGalleryItem(id) {
   if (confirm('Are you sure you want to delete this photo?')) {
+    const galleryItemToDelete = appData.gallery.find(function(g) { return g.id === id; });
     appData.gallery = appData.gallery.filter(function(g) { return g.id !== id; });
     renderGallery();
     
@@ -2684,7 +2866,18 @@ function deleteGalleryItem(id) {
       startSlideshow();
     }
     
-    showMessage('Photo deleted successfully');
+    // Sync with server
+    if (galleryItemToDelete) {
+      syncGalleryItem(galleryItemToDelete, true).then(success => {
+        if (success) {
+          showMessage('Photo deleted successfully');
+        } else {
+          showMessage('Photo deleted locally, but failed to sync with server', 'warning');
+        }
+      });
+    } else {
+      showMessage('Photo deleted successfully');
+    }
   }
 }
 

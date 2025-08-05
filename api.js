@@ -104,13 +104,15 @@ async function loadAllData() {
   try {
     showMessage('Loading data from server...', 'info');
     
-    // First check if the server is available
+    // First check if the server is available and initialize sync status
+    let serverAvailable = false;
     try {
       // Make a simple request to check server connectivity
       await fetch('/api/health-check').then(response => {
         if (!response.ok) {
           throw new Error(`Server error: ${response.status}`);
         }
+        serverAvailable = true;
       });
     } catch (connectionError) {
       // If we can't connect to the server at all or get a server error
@@ -121,6 +123,7 @@ async function loadAllData() {
         // Server is running but the health-check endpoint doesn't exist
         // This is expected, so we can continue
         console.log('Server is running, continuing with data load');
+        serverAvailable = true;
       } else {
         // For other errors, show a more specific message
         showMessage('Cannot connect to server. MongoDB connection may not be configured. Check README.md for setup instructions.', 'error');
@@ -164,6 +167,11 @@ async function loadAllData() {
     
     // Re-render all components
     renderAllComponents();
+    
+    // Initialize sync system with server status
+    if (typeof syncData === 'function') {
+      syncData(serverAvailable);
+    }
     
     showMessage('Data loaded successfully', 'success');
     return true;
